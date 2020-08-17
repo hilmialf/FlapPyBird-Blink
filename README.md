@@ -1,50 +1,9 @@
-FlapPyBird
-===============
+# FlapPyBird-Blink
 
-A Flappy Bird Clone made using [python-pygame][pygame]
+A Flappy Bird Clone made using [python-pygame][pygame] (forked from sourabhv/FlapPyBird)
 
-How-to (as tested on MacOS)
----------------------------
+I tried to implement FlapPyBird with blink as a control instead of space or keyup button using dlib library, inspired by Instagram Filter. This project is done to fulfill the final project of Intelligent Control System class in Tohoku University (Vision-Based Control)
+The face is first detected using Histogram of Oriented Gradients (HOG) feature combined with a linear classifier.
+Then, the face landmark is predicted using Kazemi's predictor. The blink is then detected by using the Eye Aspect Ratio (EAR).
 
-1. Install Python 3.x (recommended) 2.x from [here](https://www.python.org/download/releases/)
-
-1. Install [pipenv]
-
-1. Install PyGame 1.9.x from [here](http://www.pygame.org/download.shtml)
-
-1. Clone the repository:
-
-   ```bash
-   $ git clone https://github.com/sourabhv/FlapPyBird
-   ```
-
-   or download as zip and extract.
-
-1. In the root directory run
-
-   ```bash
-   $ pipenv install
-   $ pipenv run python flappy.py
-   ```
-
-1. Use <kbd>&uarr;</kbd> or <kbd>Space</kbd> key to play and <kbd>Esc</kbd> to close the game.
-
-(For x64 windows, get exe [here](http://www.lfd.uci.edu/~gohlke/pythonlibs/#pygame))
-
-Notable forks
--------------
-
-- [FlappyBird Fury Mode](https://github.com/Cc618/FlapPyBird)
-- [FlappyBird Model Predictive Control](https://github.com/philzook58/FlapPyBird-MPC)
-- [FlappyBird OpenFrameworks Port](https://github.com/TheLogicMaster/ofFlappyBird)
-
-Made something awesome from FlapPyBird? Add it to the list :)
-
-
-ScreenShot
-----------
-
-![Flappy Bird](screenshot1.png)
-
-[pygame]: http://www.pygame.org
-[pipenv]: https://pipenv.readthedocs.io/en/latest/
+Feel free to use part or all of the code.

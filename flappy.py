@@ -1,16 +1,34 @@
 from itertools import cycle
 import random
 import sys
-
 import pygame
 from pygame.locals import *
 
+from scipy.spatial import distance as dist
+from imutils import face_utils
+import numpy as np
+import time
+import cv2
+import dlib
 
 FPS = 30
-SCREENWIDTH  = 288
-SCREENHEIGHT = 512
-PIPEGAPSIZE  = 100 # gap between upper and lower part of pipe
-BASEY        = SCREENHEIGHT * 0.79
+SCREENWIDTH = 480
+SCREENHEIGHT = 480
+# blink detection parameters
+EYE_AR_THRESH = 0.2
+EYE_AR_CONSEC_FRAMES = 1
+COUNTER = 0
+
+CAM_SRC = int(0)  # source is main camera
+FACE_MODEL_FILE = 'trained_model/shape_predictor_68_face_landmarks.dat'
+UPSAMPLING_ENABLED = 0
+FACE_DETECTOR = dlib.get_frontal_face_detector()
+FACE_PREDICTOR = dlib.shape_predictor(FACE_MODEL_FILE)
+(LEFT_EYE_START, LEFT_EYE_END) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+(RIGHT_EYE_START,
+ RIGHT_EYE_END) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+PIPEGAPSIZE = 100  # gap between upper and lower part of pipe
+BASEY = SCREENHEIGHT * 0.79
 # image, sound and hitmask  dicts
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
 
@@ -36,12 +54,6 @@ PLAYERS_LIST = (
     ),
 )
 
-# list of backgrounds
-BACKGROUNDS_LIST = (
-    'assets/sprites/background-day.png',
-    'assets/sprites/background-night.png',
-)
-
 # list of pipes
 PIPES_LIST = (
     'assets/sprites/pipe-green.png',
@@ -56,6 +68,10 @@ except NameError:
 
 
 def main():
+    # ------------------------------------------------------------------------------------------------------
+    cam = cv2.VideoCapture(CAM_SRC)
+    # ------------------------------------------------------------------------------------------------------
+
     global SCREEN, FPSCLOCK
     pygame.init()
     FPSCLOCK = pygame.time.Clock()
@@ -77,11 +93,14 @@ def main():
     )
 
     # game over sprite
-    IMAGES['gameover'] = pygame.image.load('assets/sprites/gameover.png').convert_alpha()
+    IMAGES['gameover'] = pygame.image.load(
+        'assets/sprites/gameover.png').convert_alpha()
     # message sprite for welcome screen
-    IMAGES['message'] = pygame.image.load('assets/sprites/message.png').convert_alpha()
+    IMAGES['message'] = pygame.image.load(
+        'assets/sprites/message.png').convert_alpha()
     # base (ground) sprite
-    IMAGES['base'] = pygame.image.load('assets/sprites/base.png').convert_alpha()
+    IMAGES['base'] = pygame.transform.scale2x(pygame.image.load(
+        'assets/sprites/base.png').convert_alpha())  # modified hilmi
 
     # sounds
     if 'win' in sys.platform:
@@ -89,16 +108,21 @@ def main():
     else:
         soundExt = '.ogg'
 
-    SOUNDS['die']    = pygame.mixer.Sound('assets/audio/die' + soundExt)
-    SOUNDS['hit']    = pygame.mixer.Sound('assets/audio/hit' + soundExt)
-    SOUNDS['point']  = pygame.mixer.Sound('assets/audio/point' + soundExt)
+    SOUNDS['die'] = pygame.mixer.Sound('assets/audio/die' + soundExt)
+    SOUNDS['hit'] = pygame.mixer.Sound('assets/audio/hit' + soundExt)
+    SOUNDS['point'] = pygame.mixer.Sound('assets/audio/point' + soundExt)
     SOUNDS['swoosh'] = pygame.mixer.Sound('assets/audio/swoosh' + soundExt)
-    SOUNDS['wing']   = pygame.mixer.Sound('assets/audio/wing' + soundExt)
+    SOUNDS['wing'] = pygame.mixer.Sound('assets/audio/wing' + soundExt)
 
     while True:
-        # select random background sprites
-        randBg = random.randint(0, len(BACKGROUNDS_LIST) - 1)
-        IMAGES['background'] = pygame.image.load(BACKGROUNDS_LIST[randBg]).convert()
+        # ------------------------------------------------------------------------------------------------------
+        # hilmi modif
+        retval, img_bgr = cam.read()
+        if retval == False:
+            break
+        img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        # ------------------------------------------------------------------------------------------------------
 
         # select random player sprites
         randPlayer = random.randint(0, len(PLAYERS_LIST) - 1)
@@ -129,12 +153,12 @@ def main():
             getHitmask(IMAGES['player'][2]),
         )
 
-        movementInfo = showWelcomeAnimation()
-        crashInfo = mainGame(movementInfo)
-        showGameOverScreen(crashInfo)
+        movementInfo = showWelcomeAnimation(cam)
+        crashInfo = mainGame(movementInfo, cam)
+        showGameOverScreen(crashInfo, cam)
 
 
-def showWelcomeAnimation():
+def showWelcomeAnimation(cam):
     """Shows welcome screen animation of flappy bird"""
     # index of player to blit on screen
     playerIndex = 0
@@ -150,12 +174,20 @@ def showWelcomeAnimation():
 
     basex = 0
     # amount by which base can maximum shift to left
-    baseShift = IMAGES['base'].get_width() - IMAGES['background'].get_width()
+    baseShift = IMAGES['base'].get_width() - SCREENWIDTH
 
     # player shm for up-down motion on welcome screen
     playerShmVals = {'val': 0, 'dir': 1}
 
     while True:
+        # ------------------------------------------------------------------------------------------------------
+        # modif hilmi
+        retval, img_bgr = cam.read()
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_rgb = img_rgb.swapaxes(0, 1)
+        frame = pygame.surfarray.make_surface(img_rgb)
+        # ------------------------------------------------------------------------------------------------------
+
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
@@ -177,7 +209,7 @@ def showWelcomeAnimation():
         playerShm(playerShmVals)
 
         # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
+        SCREEN.blit(frame, (0, 0))
         SCREEN.blit(IMAGES['player'][playerIndex],
                     (playerx, playery + playerShmVals['val']))
         SCREEN.blit(IMAGES['message'], (messagex, messagey))
@@ -187,13 +219,16 @@ def showWelcomeAnimation():
         FPSCLOCK.tick(FPS)
 
 
-def mainGame(movementInfo):
+def mainGame(movementInfo, cam):
+    global TOTAL, COUNTER
+    BLINK = pygame.USEREVENT + 1
+
     score = playerIndex = loopIter = 0
     playerIndexGen = movementInfo['playerIndexGen']
     playerx, playery = int(SCREENWIDTH * 0.2), movementInfo['playery']
 
     basex = movementInfo['basex']
-    baseShift = IMAGES['base'].get_width() - IMAGES['background'].get_width()
+    baseShift = IMAGES['base'].get_width() - SCREENWIDTH
 
     # get 2 new pipes to add to upperPipes lowerPipes list
     newPipe1 = getRandomPipe()
@@ -214,23 +249,55 @@ def mainGame(movementInfo):
     pipeVelX = -4
 
     # player velocity, max velocity, downward accleration, accleration on flap
-    playerVelY    =  -9   # player's velocity along Y, default same as playerFlapped
-    playerMaxVelY =  10   # max vel along Y, max descend speed
-    playerMinVelY =  -8   # min vel along Y, max ascend speed
-    playerAccY    =   1   # players downward accleration
-    playerRot     =  45   # player's rotation
-    playerVelRot  =   3   # angular speed
-    playerRotThr  =  20   # rotation threshold
-    playerFlapAcc =  -9   # players speed on flapping
-    playerFlapped = False # True when player flaps
-
+    playerVelY = -5  # player's velocity along Y, default same as playerFlapped
+    playerMaxVelY = 10   # max vel along Y, max descend speed
+    playerMinVelY = -5   # min vel along Y, max ascend speed
+    playerAccY = 0.5   # players downward accleration
+    playerRot = 45   # player's rotation
+    playerVelRot = 1  # angular speed
+    playerRotThr = 20   # rotation threshold
+    playerFlapAcc = -5   # players speed on flapping
+    playerFlapped = False  # True when player flaps
 
     while True:
+        # ------------------------------------------------------------------------------------------------------
+        # modified hilmi
+        retval, img_bgr = cam.read()
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_rgb = img_rgb.swapaxes(0, 1)
+        frame = pygame.surfarray.make_surface(img_rgb)
+
+        img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        face_rectangles = FACE_DETECTOR(img_gray, UPSAMPLING_ENABLED)
+        for rect in face_rectangles:
+            shape_obj = FACE_PREDICTOR(img_gray, rect)
+            shape_obj = face_utils.shape_to_np(shape_obj)
+            leftEye = shape_obj[LEFT_EYE_START:LEFT_EYE_END]
+            rightEye = shape_obj[RIGHT_EYE_START:RIGHT_EYE_END]
+            leftEAR = eye_aspect_ratio(leftEye)
+            rightEAR = eye_aspect_ratio(rightEye)
+            ear = (leftEAR + rightEAR) / 2.0  # average
+
+            # check to see if the eye aspect ratio is below the blink
+            # threshold, and if so, increment the blink frame counter
+            if ear < EYE_AR_THRESH:
+                COUNTER += 1
+            # otherwise, the eye aspect ratio is not below the blink
+            # threshold
+            else:
+                # if the eyes were closed for a sufficient number of
+                # then increment the total number of blinks
+                if COUNTER >= EYE_AR_CONSEC_FRAMES:
+                    blink = pygame.event.Event(BLINK)
+                    pygame.event.post(blink)
+                    COUNTER = 0  # reset the eye frame counter
+        # ------------------------------------------------------------------------------------------------------
+
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
                 sys.exit()
-            if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
+            if event.type == BLINK:  # originally use keydown
                 if playery > -2 * IMAGES['player'][0].get_height():
                     playerVelY = playerFlapAcc
                     playerFlapped = True
@@ -263,7 +330,7 @@ def mainGame(movementInfo):
         if (loopIter + 1) % 3 == 0:
             playerIndex = next(playerIndexGen)
         loopIter = (loopIter + 1) % 30
-        basex = -((-basex + 100) % baseShift)
+        basex = -((-basex + 150) % baseShift)
 
         # rotate the player
         if playerRot > -90:
@@ -298,7 +365,7 @@ def mainGame(movementInfo):
             lowerPipes.pop(0)
 
         # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
+        SCREEN.blit(frame, (0, 0))
 
         for uPipe, lPipe in zip(upperPipes, lowerPipes):
             SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
@@ -312,15 +379,16 @@ def mainGame(movementInfo):
         visibleRot = playerRotThr
         if playerRot <= playerRotThr:
             visibleRot = playerRot
-        
-        playerSurface = pygame.transform.rotate(IMAGES['player'][playerIndex], visibleRot)
+
+        playerSurface = pygame.transform.rotate(
+            IMAGES['player'][playerIndex], visibleRot)
         SCREEN.blit(playerSurface, (playerx, playery))
 
         pygame.display.update()
         FPSCLOCK.tick(FPS)
 
 
-def showGameOverScreen(crashInfo):
+def showGameOverScreen(crashInfo, cam):
     """crashes the player down ans shows gameover image"""
     score = crashInfo['score']
     playerx = SCREENWIDTH * 0.2
@@ -341,6 +409,14 @@ def showGameOverScreen(crashInfo):
         SOUNDS['die'].play()
 
     while True:
+        # ------------------------------------------------------------------------------------------------------
+        # modified hilmi
+
+        retval, img_bgr = cam.read()
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_rgb = img_rgb.swapaxes(0, 1)
+        frame = pygame.surfarray.make_surface(img_rgb)
+        # ------------------------------------------------------------------------------------------------------
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
@@ -363,7 +439,7 @@ def showGameOverScreen(crashInfo):
                 playerRot -= playerVelRot
 
         # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
+        SCREEN.blit(frame, (0, 0))
 
         for uPipe, lPipe in zip(upperPipes, lowerPipes):
             SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
@@ -372,12 +448,10 @@ def showGameOverScreen(crashInfo):
         SCREEN.blit(IMAGES['base'], (basex, BASEY))
         showScore(score)
 
-        
-
-
         playerSurface = pygame.transform.rotate(IMAGES['player'][1], playerRot)
-        SCREEN.blit(playerSurface, (playerx,playery))
-        SCREEN.blit(IMAGES['gameover'], (50, 180))
+        SCREEN.blit(playerSurface, (playerx, playery))
+        SCREEN.blit(IMAGES['gameover'], ((
+            SCREENWIDTH-IMAGES['gameover'].get_width())/2, 180))
 
         FPSCLOCK.tick(FPS)
         pygame.display.update()
@@ -389,7 +463,7 @@ def playerShm(playerShm):
         playerShm['dir'] *= -1
 
     if playerShm['dir'] == 1:
-         playerShm['val'] += 1
+        playerShm['val'] += 1
     else:
         playerShm['val'] -= 1
 
@@ -404,14 +478,14 @@ def getRandomPipe():
 
     return [
         {'x': pipeX, 'y': gapY - pipeHeight},  # upper pipe
-        {'x': pipeX, 'y': gapY + PIPEGAPSIZE}, # lower pipe
+        {'x': pipeX, 'y': gapY + PIPEGAPSIZE},  # lower pipe
     ]
 
 
 def showScore(score):
     """displays score in center of screen"""
     scoreDigits = [int(x) for x in list(str(score))]
-    totalWidth = 0 # total width of all numbers to be printed
+    totalWidth = 0  # total width of all numbers to be printed
 
     for digit in scoreDigits:
         totalWidth += IMAGES['numbers'][digit].get_width()
@@ -435,7 +509,7 @@ def checkCrash(player, upperPipes, lowerPipes):
     else:
 
         playerRect = pygame.Rect(player['x'], player['y'],
-                      player['w'], player['h'])
+                                 player['w'], player['h'])
         pipeW = IMAGES['pipe'][0].get_width()
         pipeH = IMAGES['pipe'][0].get_height()
 
@@ -450,13 +524,16 @@ def checkCrash(player, upperPipes, lowerPipes):
             lHitmask = HITMASKS['pipe'][1]
 
             # if bird collided with upipe or lpipe
-            uCollide = pixelCollision(playerRect, uPipeRect, pHitMask, uHitmask)
-            lCollide = pixelCollision(playerRect, lPipeRect, pHitMask, lHitmask)
+            uCollide = pixelCollision(
+                playerRect, uPipeRect, pHitMask, uHitmask)
+            lCollide = pixelCollision(
+                playerRect, lPipeRect, pHitMask, lHitmask)
 
             if uCollide or lCollide:
                 return [True, False]
 
     return [False, False]
+
 
 def pixelCollision(rect1, rect2, hitmask1, hitmask2):
     """Checks if two objects collide and not just their rects"""
@@ -474,14 +551,26 @@ def pixelCollision(rect1, rect2, hitmask1, hitmask2):
                 return True
     return False
 
+
 def getHitmask(image):
     """returns a hitmask using an image's alpha."""
     mask = []
     for x in xrange(image.get_width()):
         mask.append([])
         for y in xrange(image.get_height()):
-            mask[x].append(bool(image.get_at((x,y))[3]))
+            mask[x].append(bool(image.get_at((x, y))[3]))
     return mask
+
+
+# ------------------------------------------------------------------------------------------------------
+def eye_aspect_ratio(eye):
+    A = dist.euclidean(eye[1], eye[5])
+    B = dist.euclidean(eye[2], eye[4])
+    C = dist.euclidean(eye[0], eye[3])
+    ear = (A + B) / (2.0 * C)
+    return ear
+# ------------------------------------------------------------------------------------------------------
+
 
 if __name__ == '__main__':
     main()
