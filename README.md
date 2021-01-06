@@ -7,3 +7,5 @@ The face is first detected using Histogram of Oriented Gradients (HOG) feature c
 Then, the face landmark is predicted using Kazemi's predictor. The blink is then detected by using the Eye Aspect Ratio (EAR).
 
 Feel free to use part or all of the code.
+
+(Run using local conda env FLapPyBird. Todo: add bash script for creating conda env to run the program)
